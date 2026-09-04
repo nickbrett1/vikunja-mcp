@@ -1,78 +1,57 @@
 # vikunja-mcp
 
-A vikunja-mcp project generated with genproj
+Thin container wrapper around [acidvegas/vikunja-mcp](https://github.com/acidvegas/vikunja-mcp)
+— an MCP server for [Vikunja](https://vikunja.io) (Go binary, stdio + Streamable
+HTTP transport). It does **not** vendor upstream source: the Dockerfile simply
+`go install`s the upstream module and serves the resulting binary, so rebuilding
+always pulls the latest upstream.
 
-## Capabilities
+The repo only contains the packaging/config (Dockerfile + CircleCI + deploy
+files) that turns the upstream binary into a `ghcr.io/nickbrett1/vikunja-mcp`
+image your NAS can run and auto-update with Watchtower.
 
-This project includes the following capabilities:
+## Why this repo?
 
-- **Docker**: Docker support for the project.
-- **Docker Container**: Containerize the project and publish to the GitHub Container Registry (GHCR) for deployment to a NAS or self-hosted host via Docker Compose. Mutually exclusive with other deployment systems.
-- **Python DevContainer**: Sets up a VS Code DevContainer with Python environment.
-- **Doppler Secrets Management**: Integrates Doppler for secure secrets management. Enables the various MCP servers that rely on privileged tokens to access their services (e.g. CircleCI, GitHub, SonarQube).
-- **CircleCI Integration**: Configures CircleCI for continuous integration and deployment. Requires Doppler: the CircleCI MCP server needs CircleCI tokens that are only available through Doppler.
+Previously the image was built by hand on the NAS (`docker compose build`), so
+Watchtower could never update it. Now:
 
-## Setup
+- Pushing to `main` (or **re-running the `publish` workflow** in CircleCI)
+  rebuilds the image against the **latest** upstream `acidvegas/vikunja-mcp`
+  and pushes `ghcr.io/nickbrett1/vikunja-mcp:latest`.
+- Watchtower on the NAS pulls the new image and recreates the container —
+  **no SSH/build on the NAS required**. Rebuild = press "Rerun" in CircleCI.
 
-1. Clone the repository
-2. Create a virtualenv and install the package with dev extras:
+> Each CircleCI run builds from a clean cache (no layer cache), so the
+> `go install ...@latest` step always fetches the newest upstream.
 
-   ```bash
-   python3 -m venv .venv
-   . .venv/bin/activate
-   pip install -e ".[dev]"
-   ```
+## Repo layout
 
-3. Run the checks:
+- `Dockerfile` — multi-stage: `golang` builds `github.com/acidvegas/vikunja-mcp`,
+  slim `alpine` runtime serves it. `--build-arg VERSION` to pin upstream.
+- `.circleci/config.yml` — `docker-publish` job (login → buildx → push to GHCR),
+  gated to `main`, using the `common` CircleCI context (`GHCR_USERNAME` /
+  `GHCR_TOKEN`).
+- `docker-compose.yml` / `.env.example` — NAS deployment reference.
+- `.devcontainer/` — devcontainer for editing this repo (Python toolchain +
+  zsh + goose + doppler); convenient but not required to rebuild.
+- `deploy/README.md` — deployment runbook.
 
-   ```bash
-   ruff check src tests
-   pytest -v
-   ```
+## Environment (runtime)
 
-## Doppler
+| Variable                | Default               | Purpose                        |
+|-------------------------|-----------------------|--------------------------------|
+| `VIKUNJA_URL`           | `http://vikunja:3456` | URL of the Vikunja API         |
+| `VIKUNJA_TOKEN`         | *(required)*          | Vikunja API token              |
+| `VIKUNJA_MCP_TRANSPORT` | `http`                | MCP transport (stdio/http)     |
+| `VIKUNJA_MCP_HOST`      | `0.0.0.0`             | Bind host for HTTP transport   |
+| `VIKUNJA_MCP_PORT`      | `8000`                | Port for HTTP transport        |
 
-This project uses Doppler for secrets from the shared `common` project
-(config `dev`) — no per-repo Doppler project is created. First use (links
-the shared project and `dev` config):
+## Rebuilding to latest
 
-```bash
-doppler setup --project common --config dev
-```
+1. Open the repo's project in CircleCI → `publish` workflow → **Rerun**.
+2. CircleCI rebuilds and pushes `ghcr.io/nickbrett1/vikunja-mcp:latest`.
+3. Watchtower recreates `vikunja-mcp` on the NAS automatically.
 
-If your repo needs app-specific secrets that shouldn't live in the shared
-`common` project, regenerate it with the doppler capability set to
-`projectStrategy: "new"` to get a dedicated project.
+## Deploy
 
-The Doppler CLI is installed in the devcontainer — it must be on PATH for the
-VS Code extension and `doppler run` to work. Auth is persisted via the host
-`~/.doppler` bind-mount.
-
-### Env-var precedence (read this if `doppler run` hits the wrong project)
-
-Doppler resolves its target as **environment variables > `doppler.yaml` >
-`~/.doppler` scoped config**. If your shell — or the session that launched
-the devcontainer (e.g. an agent runtime) — exports `DOPPLER_PROJECT` /
-`DOPPLER_CONFIG` / `DOPPLER_ENVIRONMENT`, those silently override this
-repo's `doppler.yaml` and every `doppler` command targets the wrong
-project. The devcontainer's post-create setup pins this repo's context
-(`common`/`dev`) in `~/.bashrc` and `~/.zshrc` and warns at
-setup if resolution still mismatches. To force the correct context manually:
-
-```bash
-unset DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT
-doppler setup --no-interactive --project common --config dev
-```
-
-## Deployment
-
-See `deploy/README.md` for the deployment runbook (CircleCI -> GHCR ->
-Watchtower -> Docker host). Deploy with:
-
-```bash
-docker compose up -d
-```
-
-## Generated by genproj
-
-This project was generated using the genproj tool.
+See `deploy/README.md` for the NAS / Watchtower steps.
